@@ -1,0 +1,12 @@
+.env
+data/
+/monitor-server.js
+/start-monitor.ps1
+*.log
+node_modules/
+npm-debug.log*
+.DS_Store
+*.zip
+*.tar
+*.tar.gz
+*.tgz

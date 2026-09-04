@@ -1,0 +1,16 @@
+{
+  "name": "fomo-relay-monitor",
+  "version": "1.0.0",
+  "description": "Self-hosted FOMO EVM purchase monitor with a Chrome/Edge extension and Telegram/Relay backend.",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "check": "node --check server/monitor-server.js && node --check server/relay-core.js && node --check extension/monitor-config.js && node --check extension/content.js && node --check extension/background.js && node --check extension/popup.js",
+    "test": "node --test tests/extension/*.test.js server/tests/*.test.js",
+    "start": "node server/monitor-server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}

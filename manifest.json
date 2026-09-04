@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "FOMO EVM 买入监控",
+  "version": "1.3.1",
+  "description": "从自有监控 API 读取 Relay 买入事件，并在浏览器页面显示 EVM 目标代币与成交状态。",
+  "permissions": ["storage"],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "FOMO EVM 买入监控",
+    "default_popup": "popup.html"
+  },
+  "options_page": "popup.html",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*/*"
+      ],
+      "js": ["relay-core.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

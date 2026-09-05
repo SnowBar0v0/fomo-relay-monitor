@@ -16,7 +16,9 @@
 
 ## 自部署后端
 
-要求 Node.js 18 或更高版本：
+要求 Node.js 18 或更高版本。完整的“创建后端 Bot、建立目标频道、加入后端 Bot 和监控推送 Bot、获取 `chat_id`、配置 systemd、验证事件”流程见：[后端完整部署向导](docs/DEPLOYMENT_GUIDE.md)。
+
+最短安装步骤：
 
 ```bash
 git clone --branch self-hosted https://github.com/SnowBar0v0/fomo-relay-monitor.git
@@ -47,7 +49,7 @@ set +a
 npm start
 ```
 
-Windows PowerShell 可以在当前会话设置变量后执行 `npm start`，或使用 `server/start-monitor.ps1`。完整 Telegram 接入见：[docs/TELEGRAM_SETUP.md](docs/TELEGRAM_SETUP.md)；VPS、systemd 和 Nginx 参考见：[docs/VPS_DEPLOYMENT.md](docs/VPS_DEPLOYMENT.md)。
+Windows PowerShell 可以在当前会话设置变量后执行 `npm start`，或使用 `server/start-monitor.ps1`。Telegram 规则见：[docs/TELEGRAM_SETUP.md](docs/TELEGRAM_SETUP.md)；VPS、systemd 和 Nginx 参考见：[docs/VPS_DEPLOYMENT.md](docs/VPS_DEPLOYMENT.md)。
 
 ## 安装插件
 

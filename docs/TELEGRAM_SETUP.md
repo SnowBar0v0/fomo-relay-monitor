@@ -2,6 +2,8 @@
 
 后端使用 Telegram Bot API 的 `getUpdates` 读取频道帖子、群消息及编辑消息。它只读取消息并查询 Relay，不发送交易、不保存钱包私钥。
 
+最常见的部署方式是：你创建一个后端 Bot 和一个目标频道，再把后端 Bot 与已有的监控推送 Bot 都加入该频道。监控推送 Bot 负责发消息，后端 Bot 负责读取消息和查询 Relay。完整操作顺序见：[后端完整部署向导](DEPLOYMENT_GUIDE.md)。
+
 ## 创建 Bot
 
 1. 在 Telegram 搜索 `@BotFather`，发送 `/newbot`。

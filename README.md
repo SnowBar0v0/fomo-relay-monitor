@@ -10,6 +10,7 @@
 
 - Telegram 频道帖子、群消息和编辑消息读取。
 - 从 Relay、Solscan、EVM explorer 链接或钱包地址线索匹配交易。
+- 消息包含明确 FOMO 用户句柄或 FOMO 主页链接且配置了私有凭据时，可用 FOMO `swaps` 作为 Relay 查询为空或处理中时的补全路径。
 - 展示地址备注、买入金额、目标链、代币、到账数量和合约地址。
 - 插件悬浮窗支持拖动、调整尺寸、收起、关闭、重新显示和复制地址。
 - 后端只提供 `GET /health`、`GET /api/status`、`GET /api/events?limit=100`。
@@ -59,6 +60,8 @@ Windows PowerShell 可以在当前会话设置变量后执行 `npm start`，或�
 4. 点击保存并允许访问该 origin。
 
 插件配置保存在 `chrome.storage.local`。插件不保存 Telegram token、Relay API key，不直接访问 Relay API，也不签名或执行交易。
+
+FOMO 账号接口不是默认依赖。未配置 FOMO 凭据时，后端仍使用 Telegram -> Relay 哈希/地址路径；公开仓库和插件都不会保存这些凭据。
 
 ## API
 

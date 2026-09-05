@@ -5,6 +5,7 @@ const path = require("node:path");
 const http = require("node:http");
 const https = require("node:https");
 const RelayViewer = require("./relay-core.js");
+const { FomoClient } = require("./fomo-client.js");
 
 const PORT = Number(process.env.PORT || 8787);
 const DATA_DIR = process.env.MONITOR_DATA_DIR || path.join(process.cwd(), "data");
@@ -14,6 +15,7 @@ const DEFAULT_TELEGRAM_CHAT_IDS = "";
 const RELAY_RPM = Math.max(1, Number(process.env.RELAY_RPM || 180));
 const EVENT_LIMIT = 500;
 const DEFAULT_MESSAGE_MATCH_WINDOW_MS = 15 * 60 * 1000;
+const DEFAULT_FOMO_SWAPS_LIMIT = 50;
 
 function readJson(file, fallback) {
   try {
@@ -65,7 +67,11 @@ function requestJson(url, headers, timeoutMs) {
   var proxyText = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || process.env.http_proxy || "";
   if (!proxyText) {
     return fetch(url, { headers: headers, signal: AbortSignal.timeout(timeoutMs) }).then(async function (response) {
-      return { ok: response.ok, status: response.status, body: await response.json().catch(function () { return {}; }) };
+      var responseHeaders = {};
+      if (response.headers && typeof response.headers.forEach === "function") {
+        response.headers.forEach(function (value, key) { responseHeaders[String(key).toLowerCase()] = String(value); });
+      }
+      return { ok: response.ok, status: response.status, headers: responseHeaders, body: await response.json().catch(function () { return {}; }) };
     });
   }
 
@@ -119,7 +125,7 @@ function requestJson(url, headers, timeoutMs) {
           if (timer) clearTimeout(timer);
           var body = {};
           try { body = JSON.parse(chunks.join("")); } catch (error) { body = {}; }
-          resolve({ ok: response.statusCode >= 200 && response.statusCode < 300, status: response.statusCode, body: body });
+          resolve({ ok: response.statusCode >= 200 && response.statusCode < 300, status: response.statusCode, headers: response.headers || {}, body: body });
         });
       });
       request.once("error", fail);
@@ -143,6 +149,132 @@ function extractTelegramMessage(update) {
     urls: telegramEntityUrls(message, text),
     remark: parseTelegramRemark(text),
     date: message.date ? new Date(Number(message.date) * 1000).toISOString() : ""
+  };
+}
+
+function isFomoHandle(value) {
+  return /^[A-Za-z][A-Za-z0-9_.-]{1,63}$/.test(String(value || "").replace(/^@/, ""));
+}
+
+function extractFomoHandles(text, urls) {
+  var source = String(text || "");
+  var result = [];
+  var seen = new Set();
+  var add = function (value) {
+    var handle = String(value || "").trim().replace(/^@/, "");
+    if (!isFomoHandle(handle) || seen.has(handle.toLowerCase())) return;
+    seen.add(handle.toLowerCase());
+    result.push(handle);
+  };
+
+  var labelled = source.match(/(?:user[_ ]?handle|\bfomo(?:\.family)?\b\s*(?:用户|账号|user|handle)?|用户名)\s*[:=：]?\s*@?([A-Za-z][A-Za-z0-9_.-]{1,63})/ig) || [];
+  labelled.forEach(function (value) {
+    var match = value.match(/@?([A-Za-z][A-Za-z0-9_.-]{1,63})\s*$/i);
+    if (match) add(match[1]);
+  });
+
+  if (/(?:fomo|用户|买入|trader)/i.test(source)) {
+    (source.match(/(?:^|[\s\[【(])@[A-Za-z][A-Za-z0-9_.-]{1,63}/g) || []).forEach(function (value) { add(value.replace(/^[^@]*@/, "")); });
+  }
+
+  (Array.isArray(urls) ? urls : []).forEach(function (value) {
+    try {
+      var parsed = new URL(value);
+      if (!/(?:^|\.)fomo\.family$/i.test(parsed.hostname)) return;
+      var queryHandle = parsed.searchParams.get("userHandle") || parsed.searchParams.get("handle");
+      if (queryHandle) add(queryHandle);
+      var parts = parsed.pathname.split("/").filter(Boolean);
+      var profileIndex = parts.findIndex(function (part) { return /^(?:profile|user|users)$/i.test(part); });
+      if (profileIndex >= 0 && parts[profileIndex + 1]) add(parts[profileIndex + 1]);
+    } catch (error) {
+      // Hidden Telegram links may be malformed; text extraction remains usable.
+    }
+  });
+
+  return result.slice(0, 3);
+}
+
+function isFomoRelayPurchase(swap) {
+  var item = swap || {};
+  if (String(item.provider || "").toUpperCase() !== "RELAY") return false;
+  var direction = String(item.type || item.side || item.action || "").toLowerCase();
+  if (/sell|sold|close|withdraw/.test(direction)) return false;
+  if (/buy|bought|purchase/.test(direction)) return true;
+  var inTradeId = item.inTradeId === undefined ? item.inputTradeId : item.inTradeId;
+  var outTradeId = item.outTradeId === undefined ? item.outputTradeId : item.outTradeId;
+  if (inTradeId !== undefined || outTradeId !== undefined) return inTradeId == null && outTradeId != null;
+  return Boolean(item.outTokenAddress || item.outputTokenAddress);
+}
+
+function fomoTokenView(metadata, address, networkId, fallbackSymbol) {
+  var item = metadata || {};
+  var token = item.token || item.metadata || item.currency || item;
+  return {
+    chainId: item.networkId || item.chainId || networkId,
+    chainName: RelayViewer.chainName(item.networkId || item.chainId || networkId),
+    address: item.tokenAddress || item.address || token.address || address || "",
+    symbol: item.symbol || token.symbol || fallbackSymbol || "未知代币",
+    name: item.name || token.name || item.symbol || token.symbol || fallbackSymbol || "未知代币",
+    decimals: item.decimals === undefined ? token.decimals : item.decimals,
+    amount: "",
+    amountFormatted: "",
+    usd: item.priceUSD || item.priceUsd || ""
+  };
+}
+
+function fomoHumanAmount(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  var text = String(value).trim();
+  if (/e/i.test(text)) {
+    var numeric = Number(value);
+    if (Number.isFinite(numeric)) text = numeric.toLocaleString("en-US", { useGrouping: false, maximumFractionDigits: 20 });
+  }
+  return RelayViewer.formatDecimal(text, 12);
+}
+
+function normalizeFomoSwap(swap, metadata) {
+  var item = swap || {};
+  var inputAddress = item.inTokenAddress || item.inputTokenAddress || "";
+  var outputAddress = item.outTokenAddress || item.outputTokenAddress || "";
+  var inputToken = item.inToken || item.inputToken || item.inTokenMetadata || {};
+  var outputToken = item.outToken || item.outputToken || item.outTokenMetadata || {};
+  var networkId = item.networkId || item.destinationNetworkId || item.chainId || "";
+  var output = fomoTokenView(metadata, outputAddress, networkId, outputToken.symbol || item.outTokenSymbol || item.outputSymbol);
+  var input = {
+    chainId: item.originNetworkId || item.sourceNetworkId || networkId,
+    chainName: RelayViewer.chainName(item.originNetworkId || item.sourceNetworkId || networkId),
+    address: inputAddress,
+    symbol: inputToken.symbol || item.inTokenSymbol || item.inputSymbol || "资金",
+    name: inputToken.name || item.inTokenName || item.inputName || item.inTokenSymbol || "资金",
+    decimals: inputToken.decimals || item.inTokenDecimals,
+    amount: item.inHumanAmount,
+    amountFormatted: fomoHumanAmount(item.inHumanAmount),
+    usd: item.humanUsdAmountIn || item.usdAmountIn || ""
+  };
+  var id = item.id || [item.createdAt, inputAddress, outputAddress, item.outHumanAmount].join("|");
+  return {
+    id: "fomo:" + String(id),
+    status: "success",
+    outcome: "success",
+    statusLabel: "已买入",
+    isSuccessful: true,
+    isRefund: false,
+    isFailed: false,
+    isPending: false,
+    createdAt: item.createdAt || item.timestamp || "",
+    updatedAt: item.updatedAt || item.createdAt || item.timestamp || "",
+    user: item.recipient || item.wallet || item.user || "",
+    recipient: item.recipient || "",
+    remark: item.userHandle || "",
+    input: input,
+    output: Object.assign({}, output, {
+      amount: item.outHumanAmount,
+      amountFormatted: fomoHumanAmount(item.outHumanAmount)
+    }),
+    isPurchase: true,
+    outputAmount: fomoHumanAmount(item.outHumanAmount),
+    inTxs: [],
+    outTxs: []
   };
 }
 
@@ -246,12 +378,14 @@ class RelayClient {
       if (entry[1] !== undefined && entry[1] !== null && entry[1] !== "") url.searchParams.set(entry[0], entry[1]);
     });
     var headers = { Accept: "application/json" };
-    if (useV3 && this.apiKey) headers["x-api-key"] = this.apiKey;
-    var response = await fetch(url, { headers: headers, signal: AbortSignal.timeout(10000) });
-    var body = await response.json().catch(function () { return {}; });
+    if (this.apiKey) headers["x-api-key"] = this.apiKey;
+    var response = await requestJson(url, headers, 10000);
+    var body = response.body || {};
     if (!response.ok) {
       var error = new Error(body.message || body.error || "HTTP " + response.status);
       error.status = response.status;
+      var retryAfter = Number(response.headers && response.headers["retry-after"]);
+      if (Number.isFinite(retryAfter) && retryAfter >= 0) error.retryAfterMs = Math.min(120000, retryAfter * 1000);
       throw error;
     }
     return body;
@@ -337,7 +471,21 @@ async function main() {
   var relayRetryBaseMs = Math.max(500, Number(process.env.RELAY_RETRY_BASE_MS || 2000));
   var addressLookupLimit = Math.max(5, Math.min(50, Number(process.env.RELAY_ADDRESS_LOOKUP_LIMIT || 50)));
   var messageMatchWindowMs = Math.max(60000, Number(process.env.RELAY_MESSAGE_MATCH_WINDOW_MS || DEFAULT_MESSAGE_MATCH_WINDOW_MS));
+  var fomoAccessToken = String(process.env.FOMO_ACCESS_TOKEN || "").trim();
+  var fomoRefreshToken = String(process.env.FOMO_REFRESH_TOKEN || "").trim();
+  var fomoClient = fomoAccessToken && fomoRefreshToken
+    ? new FomoClient({
+      accessToken: fomoAccessToken,
+      refreshToken: fomoRefreshToken,
+      apiBase: process.env.FOMO_API_BASE,
+      authBase: process.env.FOMO_AUTH_BASE,
+      supportedChains: process.env.FOMO_SUPPORTED_CHAINS,
+      timeoutMs: process.env.FOMO_TIMEOUT_MS
+    })
+    : null;
+  var fomoSwapsLimit = Math.max(10, Math.min(100, Number(process.env.FOMO_SWAPS_LIMIT || DEFAULT_FOMO_SWAPS_LIMIT)));
   var pendingHashes = new Map();
+  var checkedFomoMessages = new Set();
   var telegramState = {
     configured: Boolean(telegramToken),
     connected: false,
@@ -353,6 +501,25 @@ async function main() {
     chatError: "",
     chatChecks: []
   };
+  var fomoState = {
+    configured: Boolean(fomoClient),
+    enabled: Boolean(fomoClient),
+    lastLookupAt: "",
+    lastMatchAt: "",
+    lookupCount: 0,
+    matchCount: 0,
+    lastError: ""
+  };
+
+  function serviceSnapshot() {
+    return {
+      chatIds: Array.from(allowedChats),
+      telegram: telegramState,
+      fomo: fomoState,
+      mode: fomoClient ? "telegram-hash-first+fomo-swaps-fallback" : "telegram-hash-first",
+      relaySource: relay.apiKey ? "v3-term" : "v2-hash"
+    };
+  }
 
   function ingest(response, source, messageContext) {
     (response.requests || []).filter(function (request) { return request && request.isPurchase !== false; }).forEach(function (request) {
@@ -360,8 +527,52 @@ async function main() {
     });
   }
 
-  function retryDelay(attempt) {
-    return relayRetryBaseMs * Math.pow(2, Math.max(0, attempt - 1));
+  function retryDelay(attempt, error) {
+    return Math.max(relayRetryBaseMs * Math.pow(2, Math.max(0, attempt - 1)), Number(error && error.retryAfterMs) || 0);
+  }
+
+  function messageKey(message) {
+    return [message && message.chatId || "", message && message.id || "", message && message.date || ""].join(":");
+  }
+
+  async function inspectFomoMessage(message) {
+    if (!fomoClient) return false;
+    var key = messageKey(message);
+    if (checkedFomoMessages.has(key)) return false;
+    checkedFomoMessages.add(key);
+    if (checkedFomoMessages.size > 5000) checkedFomoMessages.delete(checkedFomoMessages.values().next().value);
+    var handles = extractFomoHandles(message.text, message.urls);
+    if (!handles.length) return false;
+    for (var index = 0; index < handles.length; index += 1) {
+      var handle = handles[index];
+      try {
+        fomoState.lookupCount += 1;
+        fomoState.lastLookupAt = new Date().toISOString();
+        var user = await fomoClient.resolveUser(handle);
+        var userId = user && (user.id || user.userId);
+        if (!userId) continue;
+        var swaps = await fomoClient.getSwaps(userId, fomoSwapsLimit);
+        var candidates = swaps.filter(isFomoRelayPurchase).map(function (swap) { return normalizeFomoSwap(swap); });
+        var match = selectRequestForMessage(candidates, message, messageMatchWindowMs);
+        if (!match) continue;
+        var metadata = null;
+        try { metadata = await fomoClient.getTokenMetadata(match.output.address, match.output.chainId); }
+        catch (metadataError) { console.warn("FOMO token metadata lookup failed:", metadataError.message); }
+        var event = normalizeFomoSwap(swaps.filter(function (swap) {
+          return "fomo:" + String(swap.id || [swap.createdAt, swap.inTokenAddress, swap.outTokenAddress, swap.outHumanAmount].join("|")) === match.id;
+        })[0] || {}, metadata);
+        event.remark = handle;
+        ingest({ requests: [event] }, "fomo-swaps", message);
+        fomoState.matchCount += 1;
+        fomoState.lastMatchAt = new Date().toISOString();
+        fomoState.lastError = "";
+        return true;
+      } catch (error) {
+        fomoState.lastError = error.message;
+        console.error("FOMO swaps lookup failed:", error.message);
+      }
+    }
+    return false;
   }
 
   function scheduleHashLookup(hash, message, attempt) {
@@ -377,6 +588,10 @@ async function main() {
         var waiting = !requests.length || requests.some(function (request) {
           return request.isPending || request.outcome === "unknown";
         });
+        if (waiting) inspectFomoMessage(message).catch(function (error) {
+          fomoState.lastError = error.message;
+          console.error("FOMO fallback failed:", error.message);
+        });
         if (waiting && attempt < relayRetryAttempts) {
           setTimeout(function () { scheduleHashLookup(key, message, attempt + 1); }, retryDelay(attempt));
         } else {
@@ -385,8 +600,12 @@ async function main() {
       })
       .catch(function (error) {
         console.error("Relay hash lookup failed:", error.message);
+        inspectFomoMessage(message).catch(function (fallbackError) {
+          fomoState.lastError = fallbackError.message;
+          console.error("FOMO fallback failed:", fallbackError.message);
+        });
         if (attempt < relayRetryAttempts) {
-          setTimeout(function () { scheduleHashLookup(key, message, attempt + 1); }, retryDelay(attempt));
+          setTimeout(function () { scheduleHashLookup(key, message, attempt + 1); }, retryDelay(attempt, error));
         } else {
           pendingHashes.delete(key);
         }
@@ -402,6 +621,7 @@ async function main() {
       hashes.forEach(function (hash) { scheduleHashLookup(hash, message, 1); });
       return;
     }
+    if (await inspectFomoMessage(message)) return;
     var addresses = extractAddresses(message.text, message.urls);
     for (var addressIndex = 0; addressIndex < addresses.length; addressIndex += 1) {
       try {
@@ -508,12 +728,12 @@ async function main() {
     }
     if (url.pathname === "/api/events") {
       response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ ok: true, events: store.list(url.searchParams.get("limit")), service: { chatIds: Array.from(allowedChats), telegram: telegramState, mode: "telegram-hash-first", relaySource: relay.apiKey ? "v3-term" : "v2-hash" } }));
+      response.end(JSON.stringify({ ok: true, events: store.list(url.searchParams.get("limit")), service: serviceSnapshot() }));
       return;
     }
     if (url.pathname === "/api/status") {
       response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ ok: true, events: store.list(EVENT_LIMIT).length, telegram: telegramState, chatIds: Array.from(allowedChats), mode: "telegram-hash-first", relaySource: relay.apiKey ? "v3-term" : "v2-hash" }));
+      response.end(JSON.stringify(Object.assign({ ok: true, events: store.list(EVENT_LIMIT).length }, serviceSnapshot())));
       return;
     }
     response.writeHead(404, { "Content-Type": "application/json" });
@@ -532,4 +752,15 @@ if (require.main === module) {
   main().catch(function (error) { console.error(error.message); process.exitCode = 1; });
 }
 
-module.exports = { extractAddresses, extractHashes, extractTelegramMessage, hasRelayHint, parseTelegramRemark, selectRequestForMessage };
+module.exports = {
+  extractAddresses,
+  extractFomoHandles,
+  extractHashes,
+  extractTelegramMessage,
+  fomoHumanAmount,
+  isFomoRelayPurchase,
+  hasRelayHint,
+  normalizeFomoSwap,
+  parseTelegramRemark,
+  selectRequestForMessage
+};

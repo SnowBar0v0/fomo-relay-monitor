@@ -71,6 +71,18 @@ RELAY_RPM=180
 
 此时空的 `TELEGRAM_CHAT_IDS` 只用于首次发现频道 ID。发现后必须马上填写白名单并重启，避免后端接收不相关聊天的消息。
 
+## 可选：FOMO swaps 补全
+
+默认不需要 FOMO 登录凭据。若监控消息本身带有明确的 FOMO 用户句柄（例如 `FOMO用户: @handle`、`userHandle: handle`）或 `fomo.family/profile/<handle>` 隐藏链接，可以在自有 VPS 的 `.env` 追加以下变量，让后端在 Relay 哈希查询为空或仍处于处理中时，用 `swaps` 做一次时间窗口校验和目标代币补全：
+
+```text
+FOMO_ACCESS_TOKEN=只放在自有VPS的短期access token
+FOMO_REFRESH_TOKEN=只放在自有VPS的refresh token
+FOMO_SWAPS_LIMIT=50
+```
+
+这三项不写入 `.env.example`，也不提交 Git。后端只在内存中自动刷新 access token，不把 FOMO 凭据写入 `data/`；重启服务需要重新提供当前有效的两个 token。该备用路径只接受 `provider=RELAY` 的买入记录，不使用聚合 Feed，也不能把只有钱包地址的消息可靠映射到 FOMO 用户。若 FOMO API 返回鉴权或风控错误，Relay 主路径仍继续工作。
+
 启动一次前台实例：
 
 ```bash

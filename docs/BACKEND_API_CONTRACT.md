@@ -28,6 +28,13 @@
   "events": 12,
   "mode": "telegram-hash-first",
   "relaySource": "v2-hash",
+  "fomo": {
+    "configured": false,
+    "enabled": false,
+    "lookupCount": 0,
+    "matchCount": 0,
+    "lastError": ""
+  },
   "telegram": {
     "configured": true,
     "connected": true,
@@ -71,10 +78,16 @@
   ],
   "service": {
     "mode": "telegram-hash-first",
-    "relaySource": "v2-hash"
+    "relaySource": "v2-hash",
+    "fomo": {
+      "configured": false,
+      "enabled": false
+    }
   }
 }
 ```
+
+当后端私有配置了 FOMO 凭据且消息包含明确 FOMO 句柄或主页链接时，`mode` 会变为 `telegram-hash-first+fomo-swaps-fallback`，并可能出现 `monitorSource: "fomo-swaps"`。FOMO token 不属于本契约输入，插件永远不会接收它。
 
 ## 最低字段要求
 

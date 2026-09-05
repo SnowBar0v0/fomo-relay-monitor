@@ -5,7 +5,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "check": "node --check server/monitor-server.js && node --check server/relay-core.js && node --check extension/monitor-config.js && node --check extension/content.js && node --check extension/background.js && node --check extension/popup.js",
+    "check": "node --check server/monitor-server.js && node --check server/fomo-client.js && node --check server/relay-core.js && node --check extension/monitor-config.js && node --check extension/content.js && node --check extension/background.js && node --check extension/popup.js",
     "test": "node --test tests/extension/*.test.js server/tests/*.test.js",
     "start": "node server/monitor-server.js"
   },

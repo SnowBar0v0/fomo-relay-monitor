@@ -16,7 +16,8 @@
     "42161": "Arbitrum",
     "43114": "Avalanche",
     "4663": "Robinhood Chain",
-    "792703809": "Solana"
+    "792703809": "Solana",
+    "1399811149": "Solana"
   };
 
   var SUCCESS_STATUSES = ["success", "completed", "complete", "filled"];

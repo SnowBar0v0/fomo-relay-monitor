@@ -1,6 +1,17 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { extractAddresses, extractHashes, extractTelegramMessage, hasRelayHint, parseTelegramRemark, selectRequestForMessage } = require("../monitor-server.js");
+const {
+  extractAddresses,
+  extractFomoHandles,
+  extractHashes,
+  extractTelegramMessage,
+  fomoHumanAmount,
+  hasRelayHint,
+  isFomoRelayPurchase,
+  normalizeFomoSwap,
+  parseTelegramRemark,
+  selectRequestForMessage
+} = require("../monitor-server.js");
 
 test("extracts Relay transaction hashes from Telegram text", () => {
   const solana = "Relay fill https://solscan.io/tx/5XH4R2fBtQg5fGFtuAX5PZwwxZtWt1kYFbUYimcUF2jtd4dwqAMV8faW1w2u8o8KDHMqTkyJTVBucayMARXYBKpP";
@@ -63,4 +74,41 @@ test("matches one Relay order to the Telegram post timestamp", () => {
   ], message);
   assert.equal(match.id, "target");
   assert.equal(selectRequestForMessage([{ id: "too-old", createdAt: "2026-09-04T00:00:00.000Z" }], message), null);
+});
+
+test("extracts explicit FOMO handles from labels and hidden profile links", () => {
+  assert.deepEqual(extractFomoHandles("FOMO用户: @rothstein", []), ["rothstein"]);
+  assert.deepEqual(extractFomoHandles("[ fomosol 组的 @rothstein ]", []), ["rothstein"]);
+  assert.deepEqual(extractFomoHandles("Relay buy", ["https://fomo.family/profile/rothstein"]), ["rothstein"]);
+  assert.deepEqual(extractFomoHandles("userHandle=rothstein", []), ["rothstein"]);
+  assert.deepEqual(extractFomoHandles("普通 @telegram_user", []), []);
+});
+
+test("accepts only Relay swaps that represent purchases", () => {
+  assert.equal(isFomoRelayPurchase({ provider: "RELAY", inTradeId: null, outTradeId: "trade" }), true);
+  assert.equal(isFomoRelayPurchase({ provider: "RELAY", inTradeId: "trade", outTradeId: null }), false);
+  assert.equal(isFomoRelayPurchase({ provider: "JUPITER", inTradeId: null, outTradeId: "trade" }), false);
+  assert.equal(isFomoRelayPurchase({ provider: "RELAY", side: "sell", outTokenAddress: "0x1" }), false);
+});
+
+test("normalizes a FOMO Relay swap into the read-only event contract", () => {
+  const event = normalizeFomoSwap({
+    id: "swap-1",
+    networkId: 4663,
+    inTokenAddress: "0x0000000000000000000000000000000000000000",
+    outTokenAddress: "0x1111111111111111111111111111111111111111",
+    inHumanAmount: 2.5,
+    outHumanAmount: 2733.5,
+    humanUsdAmountIn: 5,
+    recipient: "0x2222222222222222222222222222222222222222",
+    createdAt: "2026-09-06T00:00:00.000Z",
+    provider: "RELAY"
+  }, { tokenAddress: "0x1111111111111111111111111111111111111111", networkId: 4663, symbol: "MEME", name: "Meme" });
+  assert.equal(event.id, "fomo:swap-1");
+  assert.equal(event.output.chainName, "Robinhood Chain");
+  assert.equal(event.output.symbol, "MEME");
+  assert.equal(event.output.address, "0x1111111111111111111111111111111111111111");
+  assert.equal(event.outputAmount, "2,733.5");
+  assert.equal(event.isSuccessful, true);
+  assert.equal(fomoHumanAmount(1234567.89), "1,234,567.89");
 });
